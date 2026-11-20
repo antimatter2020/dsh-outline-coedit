@@ -1,0 +1,7 @@
+# 部署/调试用的临时脚本，不发布
+_e*.mjs
+fix-*.ps1
+verify-*.mjs
+*.log
+node_modules/
+.DS_Store

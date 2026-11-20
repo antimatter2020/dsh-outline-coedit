@@ -1,0 +1,8 @@
+# 大纲共写（dsh-outline-coedit）bundle 层：插入一行插件。
+# 安装：dsh plugin --profile <配置档> add "link:<插件目录>"
+- insert:
+    - id: outline-coedit
+      name: 'dsh-outline-coedit'
+      config:
+        # 是否把共写协议注入系统提示。
+        injectPrompt: true

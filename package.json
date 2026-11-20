@@ -1,0 +1,45 @@
+{
+  "name": "dsh-outline-coedit",
+  "version": "0.4.2",
+  "type": "module",
+  "description": "Outline co-edit: a right-sidebar editor working on the same plain-text files the agent writes, with anchors, lock regions, backup and conflict detection. 大纲共写侧栏。",
+  "license": "MIT",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib/files.js",
+    "lib/scaffold.js",
+    "lib/start.js",
+    "lib/tools.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "skill/SKILL.md",
+    "AGENTS.md",
+    "README.md"
+  ],
+  "engines": {
+    "dsh": ">=0.2.2-rc.3 <0.3.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "scripts": {
+    "test": "node test.js && node smoke.mjs",
+    "lint": "node lint-order.mjs"
+  }
+}
