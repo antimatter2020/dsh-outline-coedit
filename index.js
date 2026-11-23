@@ -53,7 +53,14 @@ export function apply(ctx, config) {
     try {
       if (existsSync(target) && !existsSync(path.join(target, 'START.txt'))) writeStart(target)
     } catch { /* 忽略 */ }
-    return createStore(target, { workspace: workspaceRoot ? path.resolve(workspaceRoot) : null })
+    // 工作区必须是真目录：历史设置里可能残留 C:\Users 这类坏键，
+    // 一旦拿它当备份根，备份会被拼到 C:\Users\.coedit-backups 下面直接建不出来。
+    let ws = null
+    if (workspaceRoot) {
+      const resolved = path.resolve(workspaceRoot)
+      if (isPlausibleWorkspace(resolved) && existsSync(resolved)) ws = resolved
+    }
+    return createStore(target, { workspace: ws })
   }
 
   const storeOf = (workspaceRoot) => {
@@ -78,7 +85,8 @@ export function apply(ctx, config) {
     const push = (p) => {
       if (typeof p !== 'string' || p.trim() === '') return
       const r = path.resolve(p.trim())
-      if (existsSync(r) && !candidates.includes(r)) candidates.push(r)
+      if (!isPlausibleWorkspace(r) || !existsSync(r) || candidates.includes(r)) return
+      candidates.push(r)
     }
     push(s.latestDir)
     push(s.dir)
@@ -97,7 +105,10 @@ export function apply(ctx, config) {
     // 反查这个目录注册在哪个工作区名下，备份就跟着工作区走。
     let workspace = null
     for (const [k, v] of Object.entries(map)) {
-      if (typeof v === 'string' && path.resolve(v) === dir) { workspace = k; break }
+      if (typeof v !== 'string' || path.resolve(v) !== dir) continue
+      if (!isPlausibleWorkspace(k)) continue   // C:\Users 这类坏键不能当备份根
+      workspace = k
+      break
     }
     return { dir, workspace: workspace || dir }
   }
@@ -487,7 +498,8 @@ export function apply(ctx, config) {
       if (!no) return sendJson(res, 400, { error: 'not-chapter', message: '不是章节文件' })
 
       // 从历史日志里找出最近一次 tool 写入对应的备份号。
-      const logPath = path.join(store.root, 'logs', no + '.history.txt')
+      const logDir = store.logDir()
+      const logPath = logDir ? path.join(logDir, no + '.history.txt') : ''
       let logText = ''
       try { logText = existsSync(logPath) ? readFileSync(logPath, 'utf8') : '' } catch { logText = '' }
       const lines = logText.split('\n').filter(Boolean).reverse()
@@ -572,12 +584,22 @@ function rememberFor(workspace, coeditDir) {
   writeSettings({ workspaces: all, latestDir: coeditDir })
 }
 
+/** 历史设置里可能残留 C:\Users 这类坏工作区键，读到就地清掉，别让它再拼出坏备份路径。 */
+function sanitizeSettings(settings) {
+  if (!settings.workspaces || typeof settings.workspaces !== 'object') return settings
+  const bad = Object.keys(settings.workspaces).filter((k) => !isPlausibleWorkspace(k))
+  if (bad.length === 0) return settings
+  for (const k of bad) delete settings.workspaces[k]
+  try { writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2) + '\n', 'utf8') } catch { /* 忽略 */ }
+  return settings
+}
+
 /** 读用户设置；读不到就返回空对象。 */
 function readSettings() {
   try {
     if (!existsSync(SETTINGS_FILE)) return {}
     const raw = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'))
-    return raw && typeof raw === 'object' ? raw : {}
+    return sanitizeSettings(raw && typeof raw === 'object' ? raw : {})
   } catch {
     return {}
   }
@@ -607,14 +629,15 @@ function workspaceOf(req, settings) {
   } catch { /* 继续 */ }
 
   if (typeof settings.dir === 'string' && settings.dir.trim() !== '') {
-    return path.dirname(path.resolve(settings.dir.trim()))
+    const parent = path.dirname(path.resolve(settings.dir.trim()))
+    if (isPlausibleWorkspace(parent)) return parent
   }
 
   const env = process.env.DSH_COEDIT_WORKSPACE
   if (typeof env === 'string' && env.trim() !== '') return path.resolve(env.trim())
 
   const saved = recall()
-  if (saved) return saved
+  if (saved && isPlausibleWorkspace(saved)) return saved
 
   const scanned = scanRecentWorkspace()
   if (scanned && isPlausibleWorkspace(scanned)) { remember(scanned); return scanned }

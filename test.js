@@ -269,6 +269,34 @@ await check('原生工具：没有 confirm 一律拒绝写入', async () => {
   assert.equal(readFileSync(path.join(s.root, '001.txt'), 'utf8'), '开头\n')
 })
 
+// —— 备份目录曾被坏工作区带到 C:\Users 下，写入因此全挂；下面三条守住这个坑 ——
+
+await check('坏工作区（C:\\Users）不会被当成备份根', async () => {
+  const s = fresh()
+  writeFileSync(path.join(s.root, '001.txt'), '旧\n')
+  const bad = createStore(s.root, { workspace: 'C:\\Users' })
+  const r = bad.save('001.txt', '新\n')
+  assert.equal(r.ok, true)
+  const expectDir = path.join(path.dirname(s.root), '.coedit-backups', path.basename(s.root))
+  assert.ok(existsSync(path.join(expectDir, r.backup.file)), '备份应落在共写目录旁边，而不是 C:\\Users')
+})
+
+await check('备份目录建不出来时跳过备份，正文照样写入', async () => {
+  const base = mkdtempSync(path.join(tmpdir(), 'coedit-block-'))
+  const root = path.join(base, '周2')
+  scaffold(root)
+  writeFileSync(path.join(root, '001.txt'), '旧\n')
+  // 用同名文件占住 .coedit-backups 的位置，两层退路都建不出来
+  writeFileSync(path.join(base, '.coedit-backups'), '占位')
+  const st = createStore(root, { workspace: base })
+  const r = st.save('001.txt', '新\n')
+  assert.equal(r.ok, true, '备份失败不能挡住正文')
+  assert.equal(r.backup, null)
+  assert.equal(readFileSync(path.join(root, '001.txt'), 'utf8'), '新\n')
+  assert.equal(st.state().chapters.length, 1, 'state 也不能因为备份目录坏掉就抛错')
+  assert.equal(st.logDir(), null)
+})
+
 const passed = results.filter((r) => r.ok).length
 for (const r of results) console.log((r.ok ? 'PASS  ' : 'FAIL  ') + r.name + (r.ok ? '' : '\n      ' + r.error))
 console.log('\n结果: ' + passed + '/' + results.length)

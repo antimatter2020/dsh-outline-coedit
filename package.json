@@ -1,6 +1,6 @@
 {
   "name": "dsh-outline-coedit",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "type": "module",
   "description": "Outline co-edit: a right-sidebar editor working on the same plain-text files the agent writes, with anchors, lock regions, backup and conflict detection. 大纲共写侧栏。",
   "license": "MIT",
