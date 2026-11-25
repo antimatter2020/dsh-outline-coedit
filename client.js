@@ -142,6 +142,11 @@ window.__ModuleLoader__.load({
         locateDone: '已复制。粘贴到新对话，直接说要改什么。',
         locateFail: '自动复制被浏览器拦了，手动全选复制下面这段：',
         locateClose: '收起',
+        findPlaceholder: '查找', replacePlaceholder: '替换为',
+        findPrev: '上一个（Shift+Enter）', findNext: '下一个（Enter）',
+        matchCase: '区分大小写', findClose: '关闭（Esc）',
+        replaceOne: '替换', replaceAll: '全部替换',
+        replaced: '已替换 1 处', replacedAll: '已全部替换 ', unitMatches: ' 处',
       },
       en: {
         label: 'Co-edit', guideTitle: 'Outline co-edit',
@@ -175,6 +180,11 @@ window.__ModuleLoader__.load({
         dirHint: 'Defaults to <workspace>/coedit, so it follows the workspace and machine. A picked folder applies to this workspace only.',
         workspace: 'Workspace', reset: 'Follow workspace', resetHint: 'Clear the override and use <workspace>/coedit',
         caretInsert: 'Mark', caretHint: 'Drop a [[COEDIT:HERE]] marker at the caret; the agent continues there (Ctrl+Enter)',
+        findPlaceholder: 'Find', replacePlaceholder: 'Replace with',
+        findPrev: 'Previous (Shift+Enter)', findNext: 'Next (Enter)',
+        matchCase: 'Match case', findClose: 'Close (Esc)',
+        replaceOne: 'Replace', replaceAll: 'Replace all',
+        replaced: 'Replaced 1 match', replacedAll: 'Replaced ', unitMatches: ' matches',
       },
     }
 
@@ -296,6 +306,15 @@ window.__ModuleLoader__.load({
       const taRef = React.useRef(null)
       const onWriteHereRef = React.useRef(null)
       const [caretPos, setCaretPos] = React.useState(0)
+      // 查找 / 替换
+      const [find, setFind] = React.useState(null)      // null | { mode: 'find' | 'replace' }
+      const [query, setQuery] = React.useState('')
+      const [replaceText, setReplaceText] = React.useState('')
+      const [matchCase, setMatchCase] = React.useState(false)
+      const [hit, setHit] = React.useState(0)
+      const queryRef = React.useRef(null)
+      const rootRef = React.useRef(null)
+      const pendingFindRef = React.useRef(null)
 
       const theme = THEMES[themeId] || THEMES.ink
       const dirty = cur !== null && text !== saved
@@ -453,6 +472,148 @@ window.__ModuleLoader__.load({
         // 光标写入：Ctrl+Enter 从光标处续写
         if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); if (onWriteHereRef.current) onWriteHereRef.current() }
       }, [save, reload])
+
+      // —— 查找 / 替换（Ctrl+F / Ctrl+H）——
+      // 普通 textarea 没法给单个词加底色，命中的唯一可视标记就是原生选区，
+      // 所以：打字时只设选区不抢焦点（能接着敲关键词），Enter / ↑ ↓ / F3 才把焦点交给正文。
+      const matches = React.useMemo(() => {
+        if (!query || !text) return []
+        const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        let re
+        try { re = new RegExp(escaped, matchCase ? 'g' : 'gi') } catch (_) { return [] }
+        const out = []
+        let m = re.exec(text)
+        while (m) {
+          out.push(m.index)
+          if (m[0] === '') re.lastIndex += 1
+          else if (re.lastIndex === m.index) re.lastIndex += 1
+          if (out.length > 5000) break
+          m = re.exec(text)
+        }
+        return out
+      }, [text, query, matchCase])
+
+      const hitNow = matches.length === 0 ? -1 : Math.min(hit, matches.length - 1)
+
+      const jumpTo = React.useCallback((idx, focus) => {
+        const el = taRef.current
+        if (!el || matches.length === 0 || !query) return
+        const n = ((idx % matches.length) + matches.length) % matches.length
+        const start = matches[n]
+        setHit(n)
+        if (focus !== false) el.focus()
+        el.setSelectionRange(start, start + query.length)
+        // 按字符比例把命中推到可视区中间，够用且不依赖布局测量
+        const ratio = start / Math.max(1, text.length)
+        el.scrollTop = Math.max(0, ratio * el.scrollHeight - el.clientHeight / 2)
+        setCaretPos(start)
+      }, [matches, query, text])
+
+      const lastQueryRef = React.useRef('')
+
+      const openFind = React.useCallback((mode) => {
+        setFind({ mode: mode === 'replace' ? 'replace' : 'find' })
+        // 正文里选了一段就拿来当查找词，和别的编辑器一致
+        const el = taRef.current
+        if (el) {
+          const a = el.selectionStart == null ? 0 : el.selectionStart
+          const b = el.selectionEnd == null ? a : el.selectionEnd
+          const picked = el.value.slice(a, b)
+          if (picked && picked.length <= 120 && picked.indexOf('\n') < 0) setQuery(picked)
+        }
+        requestAnimationFrame(() => {
+          const node = queryRef.current
+          if (node) { node.focus(); node.select() }
+        })
+      }, [])
+
+      const closeFind = React.useCallback(() => {
+        setFind(null)
+        lastQueryRef.current = ''
+        const el = taRef.current
+        if (el) {
+          el.focus()
+          if (hitNow >= 0) el.setSelectionRange(matches[hitNow], matches[hitNow] + query.length)
+        }
+      }, [hitNow, matches, query])
+
+      const step = React.useCallback((dir) => {
+        if (matches.length === 0) return
+        const base = hitNow < 0 ? (dir > 0 ? -1 : 0) : hitNow
+        jumpTo(base + (dir > 0 ? 1 : -1), false)
+      }, [matches.length, hitNow, jumpTo])
+
+      // 关键词变了就落到光标之后第一个命中（不抢焦点，输入不中断）
+      React.useEffect(() => {
+        if (!find) return
+        const key = (matchCase ? 'A' : 'a') + query
+        if (key === lastQueryRef.current) return
+        lastQueryRef.current = key
+        if (!query || matches.length === 0) { setHit(0); return }
+        const el = taRef.current
+        const from = el && el.selectionStart != null ? el.selectionStart : 0
+        let idx = matches.findIndex((m) => m >= from)
+        if (idx < 0) idx = 0
+        jumpTo(idx, false)
+      }, [find, query, matchCase, matches, jumpTo])
+
+      const replaceOne = React.useCallback(() => {
+        if (hitNow < 0) return
+        const start = matches[hitNow]
+        const next = text.slice(0, start) + replaceText + text.slice(start + query.length)
+        setText(next)
+        setNote(t.replaced)
+        // 从替换点之后接着找下一处
+        pendingFindRef.current = start + replaceText.length
+      }, [hitNow, matches, query, replaceText, text, t])
+
+      // 文本变了以后，把光标落到「刚替换的位置之后」的下一个命中
+      React.useEffect(() => {
+        if (!find || pendingFindRef.current == null) return
+        const from = pendingFindRef.current
+        pendingFindRef.current = null
+        if (!query || matches.length === 0) { setHit(0); return }
+        let idx = matches.findIndex((m) => m >= from)
+        if (idx < 0) idx = 0
+        jumpTo(idx, false)
+      }, [text, find, query, matches, jumpTo])
+
+      const replaceAll = React.useCallback(() => {
+        if (!query || matches.length === 0) return
+        let out = ''
+        let last = 0
+        for (const i of matches) {
+          out += text.slice(last, i) + replaceText
+          last = i + query.length
+        }
+        out += text.slice(last)
+        setText(out)
+        setNote(t.replacedAll + matches.length + t.unitMatches)
+      }, [matches, query, replaceText, text, t])
+
+      // 宿主也可能绑了 Ctrl+F / Ctrl+H，所以在 document 捕获阶段先接管，
+      // 只处理落在面板里的按键，处理完 stopPropagation，宿主收不到。
+      React.useEffect(() => {
+        const onKeyCapture = (e) => {
+          const root = rootRef.current
+          if (!root || !root.contains(e.target)) return
+          const mod = e.ctrlKey || e.metaKey
+          if (mod && (e.key === 'f' || e.key === 'F')) {
+            e.preventDefault(); e.stopPropagation(); openFind(find ? find.mode : 'find'); return
+          }
+          if (mod && (e.key === 'h' || e.key === 'H')) {
+            e.preventDefault(); e.stopPropagation(); openFind('replace'); return
+          }
+          if (e.key === 'F3') {
+            e.preventDefault(); e.stopPropagation(); step(e.shiftKey ? -1 : 1); return
+          }
+          if (e.key === 'Escape' && find) {
+            e.preventDefault(); e.stopPropagation(); closeFind()
+          }
+        }
+        window.addEventListener('keydown', onKeyCapture, true)
+        return () => window.removeEventListener('keydown', onKeyCapture, true)
+      }, [find, openFind, step, closeFind])
 
       // 下一个章号：优先用 host 给的，其次前端自己按已有文件推算。
       const nextChapterNo = () => {
@@ -708,6 +869,57 @@ window.__ModuleLoader__.load({
         ),
       )
 
+      // 查找条：第一行查找，Ctrl+H 才有第二行替换
+      const fieldStyle = {
+        font: 'inherit', fontSize: 12, padding: '3px 7px', minWidth: 0,
+        border: '1px solid ' + theme.line, borderRadius: 5,
+        background: theme.bg, color: theme.fg, outline: 'none',
+      }
+      const miniBtn = (label, onClick, title, on) => h('button', {
+        type: 'button', title: title || null,
+        style: {
+          font: 'inherit', fontSize: 11, padding: '2px 7px', borderRadius: 4, cursor: 'pointer',
+          whiteSpace: 'nowrap',
+          background: on ? theme.soft : 'transparent',
+          border: '1px solid ' + (on ? theme.accent : theme.line),
+          color: on ? theme.accent : theme.fg,
+        },
+        onClick,
+      }, label)
+
+      const findBar = !find ? null : h('div', {
+        style: {
+          display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0,
+          padding: '6px 10px', borderBottom: '1px solid ' + theme.line, background: theme.soft,
+        },
+      },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' } },
+          h('input', {
+            ref: queryRef, value: query, spellCheck: false, placeholder: t.findPlaceholder,
+            style: Object.assign({}, fieldStyle, { flex: '1 1 110px' }),
+            onChange: (e) => setQuery(e.target.value),
+            onKeyDown: (e) => { if (e.key === 'Enter') { e.preventDefault(); step(e.shiftKey ? -1 : 1) } },
+          }),
+          h('span', { style: { fontSize: 10, color: theme.muted, minWidth: 40, textAlign: 'center', fontVariantNumeric: 'tabular-nums' } },
+            query ? (matches.length === 0 ? '0/0' : (hitNow + 1) + '/' + matches.length) : ''),
+          miniBtn('↑', () => step(-1), t.findPrev, false),
+          miniBtn('↓', () => step(1), t.findNext, false),
+          miniBtn('Aa', () => setMatchCase(!matchCase), t.matchCase, matchCase),
+          h('span', { style: { flex: 1 } }),
+          miniBtn('×', closeFind, t.findClose, false),
+        ),
+        find.mode !== 'replace' ? null : h('div', { style: { display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' } },
+          h('input', {
+            value: replaceText, spellCheck: false, placeholder: t.replacePlaceholder,
+            style: Object.assign({}, fieldStyle, { flex: '1 1 110px' }),
+            onChange: (e) => setReplaceText(e.target.value),
+            onKeyDown: (e) => { if (e.key === 'Enter') { e.preventDefault(); replaceOne() } },
+          }),
+          miniBtn(t.replaceOne, replaceOne, null, false),
+          miniBtn(t.replaceAll, replaceAll, null, false),
+        ),
+      )
+
       const dirPanel = !dirOpen ? null : h('div', {
         style: {
           borderBottom: '1px solid ' + theme.line, padding: '8px 10px',
@@ -857,9 +1069,10 @@ window.__ModuleLoader__.load({
         }),
       )
 
-      return h('div', { style: rootStyle, className: 'coedit-root' },
+      return h('div', { style: rootStyle, className: 'coedit-root', ref: rootRef },
         h('style', null, GLOBAL_CSS),
         top,
+        findBar,
         dirPanel,
         body,
         conflictBar,
